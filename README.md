@@ -3,9 +3,6 @@
 A packet NPC library for Paper and Spigot. Every public member is documented, the threading rules
 are explicit and enforced, and the parts that can be tested without a server are tested.
 
-Effigy is a from-scratch rewrite inspired by [NPC-Lib](https://github.com/juliarn/NPC-Lib). It gives
-up NPC-Lib's multi-platform reach in exchange for an API that is far easier to hold in your head.
-
 ```java
 effigy.profiles().resolveByName("Notch").thenAcceptAsync(profile -> {
   Npc guide = effigy.npc()
@@ -26,26 +23,43 @@ effigy.profiles().resolveByName("Notch").thenAcceptAsync(profile -> {
 
 ---
 
-## What is different from NPC-Lib
+## Design
 
-| | NPC-Lib v3 | Effigy |
-|---|---|---|
-| Type signature | `Npc<W, P, I, E>` threaded through every class | `Npc`, no generics |
-| Javadoc | essentially none | every public member, with `@throws` and threading notes |
-| Events | custom event bus, custom subscription API | Bukkit events, `@EventHandler`, priorities, `ignoreCancelled` |
-| Packet backends | ProtocolLib **and** PacketEvents, both partially maintained | PacketEvents only, one well-tested path |
-| Threading contract | implicit | documented and enforced with a fail-fast check |
-| Duplicate clicks | reach the plugin | collapsed by a per-player cooldown before the event fires |
-| Player references | held until manually released | dropped on quit and on world change |
-| Profile lookups | resolved per NPC | cached and collapsed, one HTTP request per skin |
-| Version branching | packet-library enum constants | a parsed `MinecraftVersion` with readable ranges |
-| Holograms | not included | built in, static or per viewer |
-| Tests | none | the protocol-independent logic is covered |
+**No generics.** An NPC is an `Npc`, not an `Npc<World, Player, ItemStack, Plugin>`. Targeting one
+platform means the type parameters that would otherwise propagate into every field, method and
+collection of your plugin simply do not exist.
 
-The generics are the headline. In NPC-Lib a field holding an NPC is declared
-`Npc<World, Player, ItemStack, Plugin>`, and that signature propagates into every method, every
-listener and every collection of the plugin using it. Targeting Bukkit alone makes the same code
-read as `Npc`.
+**Bukkit events.** `NpcShowEvent`, `NpcHideEvent` and `NpcInteractEvent` are ordinary Bukkit events,
+so they work with `@EventHandler`, priorities, `ignoreCancelled` and server timings instead of a
+parallel subscription API you have to learn.
+
+**One packet backend.** PacketEvents only. Two half-maintained backends means every protocol change
+has to be fixed twice, and the one you are not using is the one that breaks.
+
+**An enforced threading contract.** Mutators run on the main thread and throw immediately otherwise.
+A spawn packet sent from an async task and interleaved with the packets of the tracking task leaves
+a ghost entity on the client that no later packet can clear; failing at the call site is cheaper
+than debugging that.
+
+**Clicks that arrive once.** A vanilla client sends two packets per right click and a modified one
+can send thousands per second. Duplicates are collapsed per player before the event fires.
+
+**No leaked players.** Viewers are dropped on quit and on world change, so an NPC never holds a
+`Player` whose connection is gone.
+
+**Skin lookups that respect the rate limit.** Profiles are cached and in-flight lookups are shared,
+so a hundred NPCs wanting the same skin produce one HTTP request rather than a hundred and an
+eventual HTTP 429.
+
+**Readable version branching.** Protocol differences are expressed as `version.atLeast(1, 19, 3)`
+rather than as constants of the packet library, so a condition states exactly which releases it
+covers and cannot break because an enum was renamed upstream.
+
+**Holograms included.** Static lines or a per-viewer renderer, following the NPC automatically.
+
+**Documented and tested.** Every public member has Javadoc; the Javadoc task runs with
+`-Xdoclint:all` and `-Werror`, so undocumented public API is a build failure. The
+protocol-independent logic has unit tests.
 
 ## Requirements
 
