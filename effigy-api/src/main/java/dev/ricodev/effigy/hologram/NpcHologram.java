@@ -15,9 +15,10 @@ import org.jetbrains.annotations.Unmodifiable;
  * The floating text above an NPC.
  *
  * <p>Every NPC owns exactly one hologram, reachable through {@link Npc#hologram()}. It starts empty
- * and costs nothing until it has lines. Each line is a separate invisible marker armour stand sent
- * only to the viewers of the NPC, so a hologram inherits the visibility rule, the view distance and
- * the lifetime of the NPC it belongs to, and follows it when it is teleported.
+ * and costs nothing until it has lines. Each line is a separate client-side entity, an invisible
+ * marker armour stand for text and a hovering dropped item for an item line, sent only to the
+ * viewers of the NPC. A hologram therefore inherits the visibility rule, the view distance and the
+ * lifetime of the NPC it belongs to, and follows it when it is teleported.
  *
  * <pre>{@code
  * npc.hologram().lines(List.of(
@@ -25,13 +26,17 @@ import org.jetbrains.annotations.Unmodifiable;
  *     "&7Right click to browse"));
  * }</pre>
  *
- * <p><strong>Static or per viewer.</strong> {@link #lines(List)} shows the same text to everybody.
- * {@link #renderer(HologramRenderer)} computes the text per viewer and takes precedence over the
- * static lines while it is set. Colour codes may use either the section sign or an ampersand.
+ * <p><strong>Text, items and animations.</strong> {@link #lines(String...)} is the shorthand for a
+ * stack of plain text. {@link #content(List)} takes {@link HologramLine} values and so can mix in
+ * floating items and {@link TextAnimation animated} lines.
  *
- * <p><strong>Layout.</strong> The first line is rendered at the top. {@link #offsetY()} places the
- * bottom line above the feet of the NPC and {@link #lineSpacing()} sets the gap between lines, both
- * in blocks.
+ * <p><strong>Static or per viewer.</strong> The content above is shown to everybody.
+ * {@link #renderer(HologramRenderer)} computes the content per viewer instead and takes precedence
+ * while it is set. Colour codes may use either the section sign or an ampersand.
+ *
+ * <p><strong>Layout.</strong> The first line is rendered at the top and the last one anchors at
+ * {@link #offsetY()} above the feet of the NPC. Lines stack upwards from there, each taking the
+ * height of its own kind: {@link #lineSpacing()} for text and {@link #itemLineHeight()} for items.
  *
  * <p><strong>Threading.</strong> Reads are safe from any thread; everything that changes the
  * hologram must run on the main thread, exactly like the rest of {@link Npc}.
@@ -51,7 +56,7 @@ public interface NpcHologram {
   Npc npc();
 
   /**
-   * Returns the static lines of this hologram.
+   * Returns the static content of this hologram.
    *
    * <p>Empty when the hologram is unused or driven by a {@link HologramRenderer}.
    *
@@ -60,23 +65,36 @@ public interface NpcHologram {
    */
   @NotNull
   @Unmodifiable
-  List<String> lines();
+  List<HologramLine> content();
 
   /**
-   * Replaces the static lines and pushes the change to every viewer.
+   * Replaces the static content and pushes the change to every viewer.
    *
-   * <p>Passing an empty list hides the hologram. Lines are copied, so later changes to the list are
-   * not picked up.
+   * <p>This is the full form of {@link #lines(String...)}: it accepts animated lines and item lines
+   * as well as plain text. An empty list hides the hologram.
    *
-   * @param lines the lines to show, the first one being the topmost.
-   * @throws NullPointerException  if {@code lines} is {@code null} or contains {@code null}.
+   * @param content the lines to show, the first one being the topmost.
+   * @throws NullPointerException  if {@code content} is {@code null} or contains {@code null}.
    * @throws IllegalStateException if called off the main thread or after the NPC was removed.
    * @since 1.0.0
    */
-  void lines(@NotNull List<String> lines);
+  void content(@NotNull List<HologramLine> content);
 
   /**
-   * Replaces the static lines and pushes the change to every viewer.
+   * Replaces the static content and pushes the change to every viewer.
+   *
+   * @param content the lines to show, the first one being the topmost.
+   * @throws NullPointerException  if {@code content} is {@code null} or contains {@code null}.
+   * @throws IllegalStateException if called off the main thread or after the NPC was removed.
+   * @since 1.0.0
+   */
+  void content(@NotNull HologramLine... content);
+
+  /**
+   * Replaces the static content with plain text lines.
+   *
+   * <p>Shorthand for wrapping each string in {@link HologramLine#text(String)}. Passing nothing
+   * hides the hologram.
    *
    * @param lines the lines to show, the first one being the topmost.
    * @throws NullPointerException  if {@code lines} is {@code null} or contains {@code null}.
@@ -150,12 +168,33 @@ public interface NpcHologram {
   void lineSpacing(double lineSpacing);
 
   /**
+   * Returns the vertical space one item line takes up.
+   *
+   * @return the item line height in blocks, {@code 0.6} by default.
+   * @since 1.0.0
+   */
+  double itemLineHeight();
+
+  /**
+   * Sets the vertical space one item line takes up.
+   *
+   * <p>A floating item is drawn much larger than a line of text, so it needs its own height; the
+   * default leaves a small gap on either side of it.
+   *
+   * @param itemLineHeight the height in blocks; must be positive.
+   * @throws IllegalArgumentException if {@code itemLineHeight} is not positive or not finite.
+   * @throws IllegalStateException    if called off the main thread or after the NPC was removed.
+   * @since 1.0.0
+   */
+  void itemLineHeight(double itemLineHeight);
+
+  /**
    * Returns whether this hologram currently shows nothing.
    *
    * <p>A hologram with a renderer is never reported as empty, because whether it produces lines is
    * only known per viewer.
    *
-   * @return {@code true} if there are no static lines and no renderer.
+   * @return {@code true} if there is no static content and no renderer.
    * @since 1.0.0
    */
   boolean isEmpty();

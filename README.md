@@ -17,7 +17,10 @@ effigy.profiles().resolveByName("Notch").thenAcceptAsync(profile -> {
 
   guide.equipment(EquipmentSlot.HAND, new ItemStack(Material.EMERALD));
   guide.glowing(ChatColor.GREEN);
-  guide.hologram().lines("&e&lVillage Shop", "&7Right click to browse");
+  guide.hologram().content(
+      HologramLine.animated(TextAnimation.wave("&7Village Shop", ChatColor.YELLOW, Duration.ofMillis(80))),
+      HologramLine.item(new ItemStack(Material.EMERALD)),
+      HologramLine.text("&8Right click to browse"));
 }, mainThread);
 ```
 
@@ -55,7 +58,8 @@ eventual HTTP 429.
 rather than as constants of the packet library, so a condition states exactly which releases it
 covers and cannot break because an enum was renamed upstream.
 
-**Holograms included.** Static lines or a per-viewer renderer, following the NPC automatically.
+**Holograms included.** Text, floating items and looping text animations, static or per viewer,
+following the NPC automatically.
 
 **Documented and tested.** Every public member has Javadoc; the Javadoc task runs with
 `-Xdoclint:all` and `-Werror`, so undocumented public API is a build failure. The
@@ -175,18 +179,53 @@ npc.hologram().lines(
     "&7Right click to browse");
 ```
 
-Each line is an invisible marker armour stand sent only to the viewers of the NPC, so a hologram
-inherits the visibility rule, the view distance and the lifetime of its NPC, and follows it when it
-is teleported. Marker stands have no hitbox, so a hologram can never swallow a click meant for the
-NPC underneath it. Both `&` and `§` colour codes work.
+Each line is a client-side entity sent only to the viewers of the NPC, so a hologram inherits the
+visibility rule, the view distance and the lifetime of its NPC, and follows it when it is teleported.
+Both `&` and `§` colour codes work.
+
+### Items and animations
+
+`content` takes `HologramLine` values and can mix three kinds:
+
+```java
+npc.hologram().content(
+    HologramLine.animated(TextAnimation.wave("&7Village Shop", ChatColor.YELLOW, Duration.ofMillis(80))),
+    HologramLine.item(new ItemStack(Material.DIAMOND_SWORD)),
+    HologramLine.text("&8Right click to browse"));
+```
+
+An **item line** is a dropped item with gravity disabled. The client bobs and rotates it on its own,
+so the effect costs no server work at all, and it cannot be picked up because the server does not
+know it exists.
+
+An **animated line** loops through precomputed frames. Effigy drives it on a task that starts when
+the first animated line appears and stops when the last one goes away, so a server whose holograms
+are all static never schedules anything. A frame change is one metadata packet per viewer; nothing
+is recomputed per tick and the renderer is never called.
+
+Four generators cover the usual cases:
+
+```java
+TextAnimation.typewriter("&eWelcome", Duration.ofMillis(60));            // reveals one character at a time
+TextAnimation.wave("&7Village Shop", ChatColor.YELLOW, ofMillis(80));    // a highlight travelling across the text
+TextAnimation.colorCycle("Shop", ofMillis(200), RED, GOLD, YELLOW);      // the whole line changing colour
+TextAnimation.of(Duration.ofMillis(150), "◐", "◓", "◑", "◒");            // your own frames
+```
+
+All of them count and cut on **visible** characters, so `typewriter("&eShop")` reveals `S`, `h`,
+`o`, `p` in yellow instead of typing out the `&` and the `e` as if they were letters. `wave` puts
+back whatever colour was in force after the highlighted character, so the rest of the line keeps its
+own formatting.
+
+### Per viewer content
 
 For text that differs per player, set a renderer instead:
 
 ```java
 npc.hologram().renderer((npc, viewer) -> List.of(
-    "&e&lVillage Shop",
-    "&7Balance: &a" + economy.balance(viewer),
-    viewer.hasPermission("shop.vip") ? "&6VIP prices active" : "&8Buy VIP for a discount"));
+    HologramLine.text("&e&lVillage Shop"),
+    HologramLine.text("&7Balance: &a" + economy.balance(viewer)),
+    HologramLine.item(shop.featuredItemFor(viewer))));
 ```
 
 A renderer runs on the main thread, once per viewer, only when the hologram is refreshed. Effigy
@@ -196,13 +235,15 @@ never puts it on a timer, so call `refresh()` yourself when the underlying data 
 Bukkit.getScheduler().runTaskTimer(plugin, () -> npc.hologram().refresh(), 20L, 20L);
 ```
 
-A refresh sends the minimum: the text of lines that already exist is updated in place, new lines are
-spawned and surplus ones destroyed. Two viewers can be looking at a different number of lines at the
-same time without either of them seeing the text flicker.
+A refresh sends the minimum: text already on screen is updated in place, new lines are spawned,
+surplus ones destroyed, and only a line whose kind changed is respawned. Two viewers can be looking
+at a different number of lines, of different kinds, without either of them seeing a flicker.
 
-`offsetY` (2.15 blocks by default) places the bottom line above the feet of the NPC and
-`lineSpacing` (0.28) sets the gap between lines. The defaults put the bottom line just clear of a
-standing player's head, with lines sitting flush against each other.
+### Layout
+
+The last line anchors at `offsetY` (2.15 blocks) above the feet of the NPC and the rest stack
+upwards, each taking the height of its own kind: `lineSpacing` (0.28) for text, `itemLineHeight`
+(0.6) for items. A hologram mixing the two still stacks without overlap.
 
 ## What Effigy deliberately does not do
 

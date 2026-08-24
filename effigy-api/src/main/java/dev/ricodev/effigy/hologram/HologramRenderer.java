@@ -18,8 +18,9 @@ import org.jetbrains.annotations.NotNull;
  *
  * <pre>{@code
  * npc.hologram().renderer((npc, viewer) -> List.of(
- *     "&e&lVillage Shop",
- *     "&7Balance: &a" + economy.balance(viewer)));
+ *     HologramLine.text("&e&lVillage Shop"),
+ *     HologramLine.text("&7Balance: &a" + economy.balance(viewer)),
+ *     HologramLine.item(shop.featuredItemFor(viewer))));
  * }</pre>
  *
  * <p><strong>Threading and cost.</strong> The renderer runs on the main thread, once per viewer
@@ -37,8 +38,8 @@ public interface HologramRenderer {
   /**
    * Produces the lines shown to one viewer.
    *
-   * <p>The first element is rendered at the top. Colour codes may use either the section sign or an
-   * ampersand.
+   * <p>The first element is rendered at the top. Every kind of {@link HologramLine} is allowed,
+   * including animated ones, which lets the animation itself differ per viewer.
    *
    * @param npc    the NPC the hologram belongs to.
    * @param viewer the player the lines are rendered for.
@@ -46,5 +47,5 @@ public interface HologramRenderer {
    * @since 1.0.0
    */
   @NotNull
-  List<String> render(@NotNull Npc npc, @NotNull Player viewer);
+  List<HologramLine> render(@NotNull Npc npc, @NotNull Player viewer);
 }

@@ -97,7 +97,8 @@ public final class NpcImpl implements Npc {
     this.location = location.clone();
     this.settings = settings;
     this.skinLayers = settings.skinLayers();
-    this.hologram = new HologramImpl(this, effigy.packets(), () -> this.checkUsable("NpcHologram"));
+    this.hologram = new HologramImpl(
+      this, effigy.packets(), () -> this.checkUsable("NpcHologram"), effigy);
   }
 
   @Override
@@ -460,6 +461,7 @@ public final class NpcImpl implements Npc {
 
     this.removed = true;
     this.hideFromAll();
+    this.hologram.onNpcRemoved();
     this.updateGlowTeam(null);
     this.metadata.clear();
     this.effigy.onNpcRemoved(this);

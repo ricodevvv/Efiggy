@@ -9,6 +9,8 @@ import dev.ricodev.effigy.Effigy;
 import dev.ricodev.effigy.Npc;
 import dev.ricodev.effigy.NpcBuilder;
 import dev.ricodev.effigy.NpcRegistry;
+import dev.ricodev.effigy.bukkit.internal.hologram.AnimationHub;
+import dev.ricodev.effigy.bukkit.internal.hologram.HologramImpl;
 import dev.ricodev.effigy.bukkit.internal.listener.ConnectionListener;
 import dev.ricodev.effigy.bukkit.internal.protocol.InteractionListener;
 import dev.ricodev.effigy.bukkit.internal.protocol.PacketBridge;
@@ -17,6 +19,8 @@ import dev.ricodev.effigy.bukkit.internal.util.CooldownTracker;
 import dev.ricodev.effigy.bukkit.internal.util.Preconditions;
 import dev.ricodev.effigy.profile.ProfileResolver;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Event;
@@ -38,7 +42,7 @@ import org.jetbrains.annotations.Nullable;
  *
  * @since 1.0.0
  */
-public final class EffigyImpl implements Effigy {
+public final class EffigyImpl implements Effigy, AnimationHub {
 
   private final Plugin plugin;
   private final PacketBridge packets;
@@ -52,6 +56,8 @@ public final class EffigyImpl implements Effigy {
   private final BukkitTask trackingTask;
   private final PacketEventsAPI<?> packetEvents;
 
+  private final Set<HologramImpl> animatedHolograms = ConcurrentHashMap.newKeySet();
+  private volatile BukkitTask animationTask;
   private volatile boolean closed;
 
   /**
@@ -130,6 +136,7 @@ public final class EffigyImpl implements Effigy {
 
     // Stop producing work first, then drain what is left, then release the resources.
     this.trackingTask.cancel();
+    this.stopAnimationTask();
     HandlerList.unregisterAll(this.connectionListener);
     this.packetEvents.getEventManager().unregisterListener(this.interactionListener);
 
@@ -205,6 +212,61 @@ public final class EffigyImpl implements Effigy {
   void onNpcRemoved(@NotNull NpcImpl npc) {
     this.registry.unregister(npc);
     this.cooldowns.forgetNpc(npc.entityId());
+  }
+
+  @Override
+  public void setAnimating(@NotNull HologramImpl hologram, boolean animating) {
+    if (this.closed) {
+      return;
+    }
+
+    if (animating) {
+      // Start the task on the first animated hologram rather than on enable, so a server whose
+      // holograms are all static never schedules anything.
+      if (this.animatedHolograms.add(hologram) && this.animationTask == null) {
+        this.startAnimationTask();
+      }
+    } else if (this.animatedHolograms.remove(hologram) && this.animatedHolograms.isEmpty()) {
+      this.stopAnimationTask();
+    }
+  }
+
+  /**
+   * Schedules the per tick task that advances hologram animations.
+   *
+   * @since 1.0.0
+   */
+  private synchronized void startAnimationTask() {
+    if (this.animationTask != null || this.closed) {
+      return;
+    }
+    this.animationTask = this.plugin.getServer().getScheduler().runTaskTimer(
+      this.plugin,
+      () -> {
+        for (HologramImpl hologram : this.animatedHolograms) {
+          try {
+            hologram.tickAnimations();
+          } catch (Throwable throwable) {
+            this.plugin.getLogger().log(
+              Level.SEVERE, "Failed to advance a hologram animation", throwable);
+          }
+        }
+      },
+      1L,
+      1L);
+  }
+
+  /**
+   * Cancels the animation task if it is running.
+   *
+   * @since 1.0.0
+   */
+  private synchronized void stopAnimationTask() {
+    BukkitTask task = this.animationTask;
+    if (task != null) {
+      task.cancel();
+      this.animationTask = null;
+    }
   }
 
   /**

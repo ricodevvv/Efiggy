@@ -9,8 +9,10 @@ import dev.ricodev.effigy.Npc;
 import dev.ricodev.effigy.bukkit.internal.protocol.PacketBridge;
 import dev.ricodev.effigy.bukkit.internal.util.EntityIds;
 import dev.ricodev.effigy.bukkit.internal.util.Preconditions;
+import dev.ricodev.effigy.hologram.HologramLine;
 import dev.ricodev.effigy.hologram.HologramRenderer;
 import dev.ricodev.effigy.hologram.NpcHologram;
+import dev.ricodev.effigy.hologram.TextAnimation;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -20,22 +22,25 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.annotations.Unmodifiable;
 
 /**
- * A stack of invisible marker armour stands that follows an NPC around.
+ * A stack of client-side entities that follows an NPC around.
  *
- * <p>The tricky part of a per viewer hologram is not drawing it but keeping track of what each
- * client currently has. Two viewers can see a different number of lines at the same time, so this
- * class remembers, per viewer, how many entities it has actually spawned. A refresh then does the
- * minimum: it updates the text of the lines that already exist, spawns the ones that are new, and
- * destroys the ones that are no longer needed. Rebuilding everything instead would make the text
- * flicker on every refresh.
+ * <p>The awkward part of a per viewer hologram is not drawing it but knowing what each client
+ * currently has, because two viewers can be looking at a different number of lines, of different
+ * kinds, at the same moment. Every viewer therefore gets a {@link ViewerState} recording exactly
+ * what was sent to it. A refresh then does the minimum: text already on screen is updated in place,
+ * new lines are spawned, surplus ones destroyed, and a line whose kind changed is despawned and
+ * respawned. Rebuilding everything instead would make the hologram flicker on every refresh, which
+ * with an animation running would mean flickering several times a second.
  *
- * <p>Entity ids are allocated once per line index and reused for the lifetime of the NPC, so a
- * hologram whose text changes every second does not slowly exhaust the id space.
+ * <p>Entity ids are allocated once per line index and reused for the lifetime of the NPC. The same
+ * id may be an armour stand on one client and a dropped item on another, which is harmless: entity
+ * ids only ever mean anything to the client they were sent to.
  *
  * <p>Not part of the public API.
  *
@@ -45,27 +50,33 @@ public final class HologramImpl implements NpcHologram {
 
   /** Where the bottom line sits above the feet of the NPC, just clear of a player's head. */
   private static final double DEFAULT_OFFSET_Y = 2.15;
-  /** The vertical size of a rendered name tag, so that stacked lines sit flush. */
+  /** The vertical size of a rendered name tag, so that stacked text lines sit flush. */
   private static final double DEFAULT_LINE_SPACING = 0.28;
+  /** The vertical size of a floating item, with a small gap on either side of it. */
+  private static final double DEFAULT_ITEM_LINE_HEIGHT = 0.6;
   /**
-   * How far above a marker armour stand its name tag is drawn. The entity itself has no size, so the
-   * text appears at this distance above the position the spawn packet carries.
+   * How far above a marker armour stand its name tag is drawn. The entity itself has no size, so
+   * the text appears at this distance above the position the spawn packet carries.
    */
   private static final double NAME_TAG_OFFSET = 0.5;
 
   private final Npc npc;
   private final PacketBridge packets;
   private final Runnable stateCheck;
+  private final AnimationHub animations;
 
   /** Entity ids by line index, grown on demand and never handed back. */
   private final List<Integer> entityIds = new ArrayList<>();
-  /** How many lines each viewer currently has spawned. */
-  private final Map<Player, Integer> spawnedLines = new ConcurrentHashMap<>();
+  /** What each viewer currently has on screen. */
+  private final Map<Player, ViewerState> states = new ConcurrentHashMap<>();
+  /** The clock every animation of this hologram is measured against. */
+  private final long startedNanos = System.nanoTime();
 
-  private volatile List<String> lines = Collections.emptyList();
+  private volatile List<HologramLine> content = Collections.emptyList();
   private volatile HologramRenderer renderer;
   private volatile double offsetY = DEFAULT_OFFSET_Y;
   private volatile double lineSpacing = DEFAULT_LINE_SPACING;
+  private volatile double itemLineHeight = DEFAULT_ITEM_LINE_HEIGHT;
 
   /**
    * Creates the hologram of an NPC.
@@ -73,30 +84,51 @@ public final class HologramImpl implements NpcHologram {
    * @param npc        the owning NPC.
    * @param packets    the packet bridge to send through.
    * @param stateCheck a callback that throws if the NPC may not be modified right now.
+   * @param animations where to report that this hologram wants to be ticked.
    * @since 1.0.0
    */
-  public HologramImpl(@NotNull Npc npc, @NotNull PacketBridge packets, @NotNull Runnable stateCheck) {
+  public HologramImpl(
+    @NotNull Npc npc,
+    @NotNull PacketBridge packets,
+    @NotNull Runnable stateCheck,
+    @NotNull AnimationHub animations
+  ) {
     this.npc = Objects.requireNonNull(npc, "npc");
     this.packets = Objects.requireNonNull(packets, "packets");
     this.stateCheck = Objects.requireNonNull(stateCheck, "stateCheck");
+    this.animations = Objects.requireNonNull(animations, "animations");
   }
 
   /**
-   * Computes where the name tag of one line has to be drawn.
+   * Computes where the anchor of every line has to sit.
    *
-   * <p>Lines are numbered from the top, but stacked from the bottom, so the last line ends up at the
-   * offset and every earlier one a spacing higher.
+   * <p>Lines are numbered from the top but stacked from the bottom: the last one anchors at the
+   * offset and each line above it clears the full height of everything below. Because the height
+   * depends on the kind of line, a hologram that mixes text and items still stacks without overlap.
    *
-   * @param baseY       the y coordinate of the feet of the NPC.
-   * @param offsetY     how far above the feet the bottom line sits.
-   * @param lineSpacing the gap between two lines.
-   * @param index       the index of the line, zero being the topmost.
-   * @param lineCount   how many lines the hologram has in total.
-   * @return the y coordinate the text of that line should appear at.
+   * @param baseY          the y coordinate of the feet of the NPC.
+   * @param offsetY        how far above the feet the bottom line sits.
+   * @param lineSpacing    the height of a text line.
+   * @param itemLineHeight the height of an item line.
+   * @param content        the lines, the first one being the topmost.
+   * @return the anchor y coordinate of each line, in the same order as the content.
    * @since 1.0.0
    */
-  public static double lineY(double baseY, double offsetY, double lineSpacing, int index, int lineCount) {
-    return baseY + offsetY + (lineCount - 1 - index) * lineSpacing;
+  @NotNull
+  public static double[] layout(
+    double baseY,
+    double offsetY,
+    double lineSpacing,
+    double itemLineHeight,
+    @NotNull List<HologramLine> content
+  ) {
+    double[] positions = new double[content.size()];
+    double cursor = baseY + offsetY;
+    for (int index = content.size() - 1; index >= 0; index--) {
+      positions[index] = cursor;
+      cursor += content.get(index).type() == HologramLine.Type.ITEM ? itemLineHeight : lineSpacing;
+    }
+    return positions;
   }
 
   @NotNull
@@ -108,27 +140,37 @@ public final class HologramImpl implements NpcHologram {
   @NotNull
   @Override
   @Unmodifiable
-  public List<String> lines() {
-    return this.lines;
+  public List<HologramLine> content() {
+    return this.content;
   }
 
   @Override
-  public void lines(@NotNull List<String> lines) {
-    Objects.requireNonNull(lines, "lines");
+  public void content(@NotNull List<HologramLine> content) {
+    Objects.requireNonNull(content, "content");
     this.stateCheck.run();
 
-    List<String> copy = new ArrayList<>(lines.size());
-    for (String line : lines) {
+    List<HologramLine> copy = new ArrayList<>(content.size());
+    for (HologramLine line : content) {
       copy.add(Objects.requireNonNull(line, "line"));
     }
-    this.lines = Collections.unmodifiableList(copy);
+    this.content = Collections.unmodifiableList(copy);
     this.refresh();
+  }
+
+  @Override
+  public void content(@NotNull HologramLine... content) {
+    Objects.requireNonNull(content, "content");
+    this.content(Arrays.asList(content));
   }
 
   @Override
   public void lines(@NotNull String... lines) {
     Objects.requireNonNull(lines, "lines");
-    this.lines(Arrays.asList(lines));
+    List<HologramLine> converted = new ArrayList<>(lines.length);
+    for (String line : lines) {
+      converted.add(HologramLine.text(Objects.requireNonNull(line, "line")));
+    }
+    this.content(converted);
   }
 
   @Nullable
@@ -173,8 +215,23 @@ public final class HologramImpl implements NpcHologram {
   }
 
   @Override
+  public double itemLineHeight() {
+    return this.itemLineHeight;
+  }
+
+  @Override
+  public void itemLineHeight(double itemLineHeight) {
+    Preconditions.argument(
+      Double.isFinite(itemLineHeight) && itemLineHeight > 0.0,
+      "The item line height must be a positive, finite number of blocks");
+    this.stateCheck.run();
+    this.itemLineHeight = itemLineHeight;
+    this.moveForAll();
+  }
+
+  @Override
   public boolean isEmpty() {
-    return this.renderer == null && this.lines.isEmpty();
+    return this.renderer == null && this.content.isEmpty();
   }
 
   @Override
@@ -185,6 +242,7 @@ public final class HologramImpl implements NpcHologram {
         this.render(viewer);
       }
     }
+    this.reportAnimationState();
   }
 
   @Override
@@ -193,6 +251,7 @@ public final class HologramImpl implements NpcHologram {
     this.stateCheck.run();
     if (this.npc.isViewer(viewer)) {
       this.render(viewer);
+      this.reportAnimationState();
     }
   }
 
@@ -204,6 +263,7 @@ public final class HologramImpl implements NpcHologram {
    */
   public void onViewerAdded(@NotNull Player viewer) {
     this.render(viewer);
+    this.reportAnimationState();
   }
 
   /**
@@ -213,10 +273,11 @@ public final class HologramImpl implements NpcHologram {
    * @since 1.0.0
    */
   public void onViewerRemoved(@NotNull Player viewer) {
-    Integer spawned = this.spawnedLines.remove(viewer);
-    if (spawned != null && spawned > 0 && viewer.isOnline()) {
-      this.packets.sendDespawn(viewer, this.idsUpTo(spawned));
+    ViewerState state = this.states.remove(viewer);
+    if (state != null && !state.content.isEmpty() && viewer.isOnline()) {
+      this.packets.sendDespawn(viewer, this.idsUpTo(state.content.size()));
     }
+    this.reportAnimationState();
   }
 
   /**
@@ -226,7 +287,8 @@ public final class HologramImpl implements NpcHologram {
    * @since 1.0.0
    */
   public void forgetViewer(@NotNull Player viewer) {
-    this.spawnedLines.remove(viewer);
+    this.states.remove(viewer);
+    this.reportAnimationState();
   }
 
   /**
@@ -239,62 +301,192 @@ public final class HologramImpl implements NpcHologram {
   }
 
   /**
+   * Releases everything held by this hologram when its NPC is removed.
+   *
+   * @since 1.0.0
+   */
+  public void onNpcRemoved() {
+    this.states.clear();
+    this.animations.setAnimating(this, false);
+  }
+
+  /**
+   * Advances every animated line by whatever the clock says and resends the ones that changed.
+   *
+   * <p>Runs once per tick while this hologram is registered with the {@link AnimationHub}. It never
+   * calls the {@link HologramRenderer}: the content each viewer has is already recorded, so an
+   * animation costs one metadata packet per changed line and nothing else.
+   *
+   * @since 1.0.0
+   */
+  public void tickAnimations() {
+    for (Map.Entry<Player, ViewerState> entry : this.states.entrySet()) {
+      Player viewer = entry.getKey();
+      if (!viewer.isOnline()) {
+        continue;
+      }
+
+      ViewerState state = entry.getValue();
+      for (int index = 0; index < state.content.size(); index++) {
+        HologramLine line = state.content.get(index);
+        TextAnimation animation = line.animation();
+        if (animation == null) {
+          continue;
+        }
+
+        int frame = this.frameOf(animation);
+        if (frame == state.frames[index]) {
+          continue;
+        }
+        state.frames[index] = frame;
+        this.packets.sendMetadata(
+          viewer,
+          this.entityId(index),
+          this.packets.buildHologramLineMetadata(animation.frame(frame)));
+      }
+    }
+  }
+
+  /**
+   * Returns which frame of an animation is due right now.
+   *
+   * @param animation the animation to read the clock for.
+   * @return the frame index, already wrapped into the loop.
+   * @since 1.0.0
+   */
+  private int frameOf(@NotNull TextAnimation animation) {
+    long elapsed = System.nanoTime() - this.startedNanos;
+    long interval = Math.max(1L, animation.interval().toNanos());
+    return (int) ((elapsed / interval) % animation.frameCount());
+  }
+
+  /**
+   * Tells the hub whether this hologram still needs ticking.
+   *
+   * @since 1.0.0
+   */
+  private void reportAnimationState() {
+    boolean animating = false;
+    for (ViewerState state : this.states.values()) {
+      for (HologramLine line : state.content) {
+        if (line.type() == HologramLine.Type.ANIMATED_TEXT) {
+          animating = true;
+          break;
+        }
+      }
+      if (animating) {
+        break;
+      }
+    }
+    this.animations.setAnimating(this, animating);
+  }
+
+  /**
    * Renders the current state of the hologram for one viewer, sending only what changed.
    *
    * @param viewer the viewer to update.
    * @since 1.0.0
    */
   private void render(@NotNull Player viewer) {
-    List<String> content = this.contentFor(viewer);
-    int wanted = content.size();
-    int spawned = this.spawnedLines.getOrDefault(viewer, 0);
-    Location base = this.npc.location();
+    List<HologramLine> wanted = this.contentFor(viewer);
+    ViewerState previous = this.states.get(viewer);
+    List<HologramLine> current = previous == null ? Collections.emptyList() : previous.content;
 
-    // Destroy the surplus first: the lines that stay are about to be repositioned anyway.
-    if (spawned > wanted) {
-      int[] surplus = new int[spawned - wanted];
-      for (int index = wanted; index < spawned; index++) {
-        surplus[index - wanted] = this.entityId(index);
+    // Destroy the surplus first; the lines that stay are about to be repositioned anyway.
+    if (current.size() > wanted.size()) {
+      int[] surplus = new int[current.size() - wanted.size()];
+      for (int index = wanted.size(); index < current.size(); index++) {
+        surplus[index - wanted.size()] = this.entityId(index);
       }
       this.packets.sendDespawn(viewer, surplus);
     }
 
-    for (int index = 0; index < wanted; index++) {
+    if (wanted.isEmpty()) {
+      this.states.remove(viewer);
+      return;
+    }
+
+    Location base = this.npc.location();
+    double[] positions = layout(
+      base.getY(), this.offsetY, this.lineSpacing, this.itemLineHeight, wanted);
+    ViewerState state = new ViewerState(wanted);
+
+    for (int index = 0; index < wanted.size(); index++) {
+      HologramLine line = wanted.get(index);
       int entityId = this.entityId(index);
-      Location position = this.positionOf(base, index, wanted);
-      if (index >= spawned) {
-        this.packets.sendHologramLineSpawn(viewer, entityId, position);
-      } else {
-        this.packets.sendHologramLineMove(viewer, entityId, position);
+      boolean existed = index < current.size();
+      boolean sameKind = existed && current.get(index).type() == line.type();
+
+      if (existed && !sameKind) {
+        // A text line cannot become an item line in place; the client has to be given a new entity.
+        this.packets.sendDespawn(viewer, entityId);
       }
 
-      List<EntityData<?>> metadata = this.packets.buildHologramLineMetadata(content.get(index));
-      this.packets.sendMetadata(viewer, entityId, metadata);
-    }
+      Location position = this.positionOf(base, positions[index], line.type());
+      if (sameKind) {
+        this.packets.sendHologramLineMove(viewer, entityId, position);
+      } else if (line.type() == HologramLine.Type.ITEM) {
+        this.packets.sendItemLineSpawn(viewer, entityId, position);
+      } else {
+        this.packets.sendHologramLineSpawn(viewer, entityId, position);
+      }
 
-    if (wanted == 0) {
-      this.spawnedLines.remove(viewer);
-    } else {
-      this.spawnedLines.put(viewer, wanted);
+      this.packets.sendMetadata(viewer, entityId, this.metadataOf(line, state, index));
     }
+    this.states.put(viewer, state);
   }
 
   /**
-   * Repositions the lines every viewer already has, without touching their text.
+   * Builds the metadata for one line and records the animation frame it was built from.
+   *
+   * @param line  the line to render.
+   * @param state the state being assembled for the viewer.
+   * @param index the index of the line.
+   * @return the metadata entries to send.
+   * @since 1.0.0
+   */
+  @NotNull
+  private List<EntityData<?>> metadataOf(
+    @NotNull HologramLine line,
+    @NotNull ViewerState state,
+    int index
+  ) {
+    if (line.type() == HologramLine.Type.ITEM) {
+      ItemStack item = line.item();
+      return this.packets.buildItemLineMetadata(Objects.requireNonNull(item, "item"));
+    }
+
+    TextAnimation animation = line.animation();
+    if (animation == null) {
+      return this.packets.buildHologramLineMetadata(Objects.requireNonNull(line.text(), "text"));
+    }
+
+    int frame = this.frameOf(animation);
+    state.frames[index] = frame;
+    return this.packets.buildHologramLineMetadata(animation.frame(frame));
+  }
+
+  /**
+   * Repositions the lines every viewer already has, without touching their content.
    *
    * @since 1.0.0
    */
   private void moveForAll() {
     Location base = this.npc.location();
-    for (Map.Entry<Player, Integer> entry : this.spawnedLines.entrySet()) {
+    for (Map.Entry<Player, ViewerState> entry : this.states.entrySet()) {
       Player viewer = entry.getKey();
       if (!viewer.isOnline()) {
         continue;
       }
-      int count = entry.getValue();
-      for (int index = 0; index < count; index++) {
+
+      List<HologramLine> lines = entry.getValue().content;
+      double[] positions = layout(
+        base.getY(), this.offsetY, this.lineSpacing, this.itemLineHeight, lines);
+      for (int index = 0; index < lines.size(); index++) {
         this.packets.sendHologramLineMove(
-          viewer, this.entityId(index), this.positionOf(base, index, count));
+          viewer,
+          this.entityId(index),
+          this.positionOf(base, positions[index], lines.get(index).type()));
       }
     }
   }
@@ -307,31 +499,41 @@ public final class HologramImpl implements NpcHologram {
    * @since 1.0.0
    */
   @NotNull
-  private List<String> contentFor(@NotNull Player viewer) {
+  private List<HologramLine> contentFor(@NotNull Player viewer) {
     HologramRenderer current = this.renderer;
     if (current == null) {
-      return this.lines;
+      return this.content;
     }
 
-    List<String> rendered = current.render(this.npc, viewer);
-    return rendered == null ? Collections.emptyList() : rendered;
+    List<HologramLine> rendered = current.render(this.npc, viewer);
+    if (rendered == null || rendered.isEmpty()) {
+      return Collections.emptyList();
+    }
+
+    // A renderer is plugin code; a null in the middle of its list must not reach the packet layer.
+    List<HologramLine> copy = new ArrayList<>(rendered.size());
+    for (HologramLine line : rendered) {
+      if (line != null) {
+        copy.add(line);
+      }
+    }
+    return copy;
   }
 
   /**
-   * Computes the spawn position of one line.
+   * Turns the anchor of a line into the position its entity has to be spawned at.
    *
-   * @param base      the location of the NPC.
-   * @param index     the index of the line, zero being the topmost.
-   * @param lineCount how many lines the hologram has for this viewer.
-   * @return the location the armour stand of that line has to sit at.
+   * @param base   the location of the NPC.
+   * @param anchor the y coordinate the line should appear at.
+   * @param type   what kind of line it is.
+   * @return the spawn location of the entity.
    * @since 1.0.0
    */
   @NotNull
-  private Location positionOf(@NotNull Location base, int index, int lineCount) {
-    double textY = lineY(base.getY(), this.offsetY, this.lineSpacing, index, lineCount);
+  private Location positionOf(@NotNull Location base, double anchor, @NotNull HologramLine.Type type) {
     Location position = base.clone();
-    // The spawn packet carries the position of the entity, the text floats above it.
-    position.setY(textY - NAME_TAG_OFFSET);
+    // An item is drawn at its own position; a name tag floats above the entity carrying it.
+    position.setY(type == HologramLine.Type.ITEM ? anchor : anchor - NAME_TAG_OFFSET);
     position.setYaw(0.0f);
     position.setPitch(0.0f);
     return position;
@@ -366,5 +568,24 @@ public final class HologramImpl implements NpcHologram {
       ids[index] = this.entityId(index);
     }
     return ids;
+  }
+
+  /**
+   * What one viewer currently has on screen, and which animation frame each line was drawn at.
+   *
+   * @since 1.0.0
+   */
+  private static final class ViewerState {
+
+    private final List<HologramLine> content;
+    private final int[] frames;
+
+    private ViewerState(@NotNull List<HologramLine> content) {
+      this.content = content;
+      this.frames = new int[content.size()];
+      // -1 is not a valid frame, so the first tick after a render always sends an update if the
+      // clock moved on in the meantime.
+      Arrays.fill(this.frames, -1);
+    }
   }
 }

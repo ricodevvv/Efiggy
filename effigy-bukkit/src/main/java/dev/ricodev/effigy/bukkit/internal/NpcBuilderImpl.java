@@ -130,7 +130,7 @@ public final class NpcBuilderImpl implements NpcBuilder {
     npc.metadata().putAll(this.metadata);
     if (!this.hologramLines.isEmpty()) {
       // Set before registering, so the first tracking cycle already spawns the lines.
-      npc.hologram().lines(this.hologramLines);
+      npc.hologram().lines(this.hologramLines.toArray(new String[0]));
     }
     this.effigy.onNpcCreated(npc);
     return npc;

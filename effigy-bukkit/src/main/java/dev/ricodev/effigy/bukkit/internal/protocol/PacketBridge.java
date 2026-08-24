@@ -88,6 +88,11 @@ public final class PacketBridge {
   private static final int CUSTOM_NAME_VISIBLE_INDEX = 3;
   /** Index of the flag disabling gravity, which for a client-side entity means it stays put. */
   private static final int NO_GRAVITY_INDEX = 5;
+  /**
+   * Index of the stack carried by a dropped item entity. Item entities extend the base entity
+   * directly rather than the living entity, so this is the first index after the shared fields.
+   */
+  private static final int ITEM_STACK_INDEX = 8;
 
   /** Bit of the flag byte marking an entity as sneaking. */
   private static final byte FLAG_SNEAKING = 0x02;
@@ -399,6 +404,49 @@ public final class PacketBridge {
       new com.github.retrooper.packetevents.protocol.world.Location(
         new Vector3d(location.getX(), location.getY(), location.getZ()), 0.0f, 0.0f),
       false));
+  }
+
+  /**
+   * Spawns a hovering dropped item, the entity an item hologram line is made of.
+   *
+   * <p>The client renders a dropped item bobbing and slowly rotating on its own, which is exactly
+   * the effect an item line wants, so no animation has to be driven from the server.
+   *
+   * @param viewer   the player to send the packet to.
+   * @param entityId the entity id of the line.
+   * @param location where the item floats.
+   * @since 1.0.0
+   */
+  public void sendItemLineSpawn(@NotNull Player viewer, int entityId, @NotNull Location location) {
+    this.send(viewer, new WrapperPlayServerSpawnEntity(
+      entityId,
+      Optional.of(UUID.randomUUID()),
+      EntityTypes.ITEM,
+      new Vector3d(location.getX(), location.getY(), location.getZ()),
+      0.0f,
+      0.0f,
+      0.0f,
+      0,
+      Optional.empty()));
+  }
+
+  /**
+   * Builds the metadata that puts a stack into a floating item line.
+   *
+   * @param item the item to display.
+   * @return the metadata entries describing the line.
+   * @since 1.0.0
+   */
+  @NotNull
+  public List<EntityData<?>> buildItemLineMetadata(@NotNull ItemStack item) {
+    List<EntityData<?>> data = new ArrayList<>(2);
+    // Without this the client applies gravity and the item sinks out of the hologram.
+    data.add(new EntityData<>(NO_GRAVITY_INDEX, EntityDataTypes.BOOLEAN, Boolean.TRUE));
+    data.add(new EntityData<>(
+      ITEM_STACK_INDEX,
+      EntityDataTypes.ITEMSTACK,
+      SpigotReflectionUtil.decodeBukkitItemStack(item)));
+    return data;
   }
 
   /**
