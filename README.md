@@ -67,9 +67,32 @@ protocol-independent logic has unit tests.
 
 ## Requirements
 
-- Java 17 or newer
-- Paper or Spigot 1.17 – 1.21.x
-- [PacketEvents](https://github.com/retrooper/packetevents) 2.x, either as a server plugin or shaded
+- Java 8 or newer on the server
+- Paper or Spigot 1.8.8 – 26.3
+- [PacketEvents](https://github.com/retrooper/packetevents) 2.14.0 or newer, either as a server plugin or
+  shaded
+
+## Version support
+
+One jar covers 1.8.8 all the way up to 26.3. Packets go out in the format of the server version, so
+if players join with a different client through ViaVersion or ViaBackwards, Via does the translating
+like it does for everything else.
+
+Most of the API behaves the same everywhere. The few things old versions simply don't have:
+
+- **Glowing** arrived in 1.9. On 1.8 `glowing(color)` remembers the colour and does nothing else.
+- **Off hand** arrived in 1.9 too. On 1.8 off hand equipment and the off hand swing are skipped, and
+  every click reports `HAND`.
+- **Poses** arrived in 1.14. Before that only `CROUCHING` works, and it shows up as sneaking.
+- **Tab list.** Before 1.19.3 there's no "known but not listed" state, so the entry gets removed after
+  `tabListRemovalDelay` instead.
+- **Item lines** on 1.8 and 1.9 ride an invisible armour stand, because entities can't turn gravity
+  off until 1.10 and a lone item would just fall. It looks the same, it's just two entities instead
+  of one.
+
+Everything else that moved in the protocol over the years (metadata indexes, the 1.20.2 player
+spawn, the 1.19.4 hurt animation, the 26.3 swing packet and so on) is handled internally, so none of
+it leaks into your code.
 
 ## Installation
 
@@ -85,7 +108,7 @@ repositories {
 
 dependencies {
   implementation("com.github.ricodevvv.Efiggy:effigy-bukkit:1.0.0")
-  compileOnly("com.github.retrooper:packetevents-spigot:2.13.0")
+  compileOnly("com.github.retrooper:packetevents-spigot:2.14.0")
 }
 ```
 
@@ -257,10 +280,15 @@ upwards, each taking the height of its own kind: `lineSpacing` (0.28) for text, 
 The Gradle wrapper is not committed, so generate it once:
 
 ```bash
-gradle wrapper --gradle-version 8.12
+gradle wrapper --gradle-version 8.14.3
 ./gradlew build          # compile, test, and build the javadoc
 ./gradlew publishToMavenLocal
 ```
+
+You need JDK 21 to build, even though the jar targets Java 8. The sources compile against the
+Spigot 1.8.8 API, so anything that doesn't exist on 1.8 fails right there, and `check` compiles them
+a second time against the latest Paper API (`verifyModernApi`) to catch anything newer versions
+removed. Paper's API ships Java 21 class files, hence the JDK.
 
 Undocumented public API is a build failure, not a warning: the javadoc task runs with
 `-Xdoclint:all` and `-Werror`.
