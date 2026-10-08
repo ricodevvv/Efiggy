@@ -38,6 +38,14 @@ public final class NpcRegistryImpl implements NpcRegistry {
   private final Map<UUID, Npc> byUniqueId = new ConcurrentHashMap<>();
   private final Collection<Npc> view = Collections.unmodifiableCollection(this.byEntityId.values());
 
+  /**
+   * Creates an empty registry.
+   *
+   * @since 1.0.0
+   */
+  public NpcRegistryImpl() {
+  }
+
   @NotNull
   @Override
   public Optional<Npc> byEntityId(int entityId) {
