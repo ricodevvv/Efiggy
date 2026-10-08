@@ -82,7 +82,9 @@ public final class HologramLine {
    * Creates a line showing a slowly rotating item.
    *
    * <p>The item is a client-side dropped item with gravity disabled, so it hovers in place and spins
-   * the way a dropped item does. It cannot be picked up: the server has no idea it exists.
+   * the way a dropped item does. It cannot be picked up: the server has no idea it exists. Before
+   * 1.10 entities cannot switch gravity off, so there the item rides an invisible armour stand
+   * instead, which looks the same.
    *
    * <p>The stack is copied, so later changes to it are not picked up. An item line is taller than a
    * text line; see {@link NpcHologram#itemLineHeight()}.

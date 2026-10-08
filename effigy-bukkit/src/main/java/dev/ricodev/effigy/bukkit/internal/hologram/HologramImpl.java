@@ -42,6 +42,9 @@ import org.jetbrains.annotations.Unmodifiable;
  * id may be an armour stand on one client and a dropped item on another, which is harmless: entity
  * ids only ever mean anything to the client they were sent to.
  *
+ * <p>Before 1.10 an item line is two entities, the item and the invisible armour stand it rides, so
+ * item lines get a second id per index for the vehicle. Those are allocated only on such servers.
+ *
  * <p>Not part of the public API.
  *
  * @since 1.0.0
@@ -67,6 +70,8 @@ public final class HologramImpl implements NpcHologram {
 
   /** Entity ids by line index, grown on demand and never handed back. */
   private final List<Integer> entityIds = new ArrayList<>();
+  /** Entity ids of the vehicles item lines ride before 1.10, by line index. */
+  private final List<Integer> vehicleIds = new ArrayList<>();
   /** What each viewer currently has on screen. */
   private final Map<Player, ViewerState> states = new ConcurrentHashMap<>();
   /** The clock every animation of this hologram is measured against. */
@@ -275,7 +280,7 @@ public final class HologramImpl implements NpcHologram {
   public void onViewerRemoved(@NotNull Player viewer) {
     ViewerState state = this.states.remove(viewer);
     if (state != null && !state.content.isEmpty() && viewer.isOnline()) {
-      this.packets.sendDespawn(viewer, this.idsUpTo(state.content.size()));
+      this.packets.sendDespawn(viewer, this.idsOf(state.content, 0, state.content.size()));
     }
     this.reportAnimationState();
   }
@@ -392,13 +397,8 @@ public final class HologramImpl implements NpcHologram {
     ViewerState previous = this.states.get(viewer);
     List<HologramLine> current = previous == null ? Collections.emptyList() : previous.content;
 
-    // Destroy the surplus first; the lines that stay are about to be repositioned anyway.
     if (current.size() > wanted.size()) {
-      int[] surplus = new int[current.size() - wanted.size()];
-      for (int index = wanted.size(); index < current.size(); index++) {
-        surplus[index - wanted.size()] = this.entityId(index);
-      }
-      this.packets.sendDespawn(viewer, surplus);
+      this.packets.sendDespawn(viewer, this.idsOf(current, wanted.size(), current.size()));
     }
 
     if (wanted.isEmpty()) {
@@ -413,25 +413,15 @@ public final class HologramImpl implements NpcHologram {
 
     for (int index = 0; index < wanted.size(); index++) {
       HologramLine line = wanted.get(index);
-      int entityId = this.entityId(index);
       boolean existed = index < current.size();
       boolean sameKind = existed && current.get(index).type() == line.type();
 
       if (existed && !sameKind) {
-        // A text line cannot become an item line in place; the client has to be given a new entity.
-        this.packets.sendDespawn(viewer, entityId);
+        this.packets.sendDespawn(viewer, this.idsOf(current, index, index + 1));
       }
 
-      Location position = this.positionOf(base, positions[index], line.type());
-      if (sameKind) {
-        this.packets.sendHologramLineMove(viewer, entityId, position);
-      } else if (line.type() == HologramLine.Type.ITEM) {
-        this.packets.sendItemLineSpawn(viewer, entityId, position);
-      } else {
-        this.packets.sendHologramLineSpawn(viewer, entityId, position);
-      }
-
-      this.packets.sendMetadata(viewer, entityId, this.metadataOf(line, state, index));
+      this.place(viewer, index, line.type(), this.positionOf(base, positions[index], line.type()), !sameKind);
+      this.packets.sendMetadata(viewer, this.entityId(index), this.metadataOf(line, state, index));
     }
     this.states.put(viewer, state);
   }
@@ -483,10 +473,8 @@ public final class HologramImpl implements NpcHologram {
       double[] positions = layout(
         base.getY(), this.offsetY, this.lineSpacing, this.itemLineHeight, lines);
       for (int index = 0; index < lines.size(); index++) {
-        this.packets.sendHologramLineMove(
-          viewer,
-          this.entityId(index),
-          this.positionOf(base, positions[index], lines.get(index).type()));
+        HologramLine.Type type = lines.get(index).type();
+        this.place(viewer, index, type, this.positionOf(base, positions[index], type), false);
       }
     }
   }
@@ -540,6 +528,41 @@ public final class HologramImpl implements NpcHologram {
   }
 
   /**
+   * Spawns one line on a client, or moves it if the client already has it.
+   *
+   * @param viewer   the viewer to send to.
+   * @param index    the index of the line.
+   * @param type     what kind of line it is.
+   * @param position where its entity goes.
+   * @param spawn    {@code true} to spawn the line, {@code false} to move an existing one.
+   * @since 1.0.0
+   */
+  private void place(
+    @NotNull Player viewer,
+    int index,
+    @NotNull HologramLine.Type type,
+    @NotNull Location position,
+    boolean spawn
+  ) {
+    int entityId = this.entityId(index);
+    if (type != HologramLine.Type.ITEM) {
+      if (spawn) {
+        this.packets.sendHologramLineSpawn(viewer, entityId, position);
+      } else {
+        this.packets.sendHologramLineMove(viewer, entityId, position);
+      }
+      return;
+    }
+
+    int vehicleId = this.packets.itemLinesRide() ? this.vehicleId(index) : entityId;
+    if (spawn) {
+      this.packets.sendItemLineSpawn(viewer, entityId, vehicleId, position);
+    } else {
+      this.packets.sendItemLineMove(viewer, entityId, vehicleId, position);
+    }
+  }
+
+  /**
    * Returns the entity id of a line, allocating one the first time the index is used.
    *
    * @param index the line index.
@@ -547,27 +570,58 @@ public final class HologramImpl implements NpcHologram {
    * @since 1.0.0
    */
   private int entityId(int index) {
-    synchronized (this.entityIds) {
-      while (this.entityIds.size() <= index) {
-        this.entityIds.add(EntityIds.next());
+    return allocate(this.entityIds, index);
+  }
+
+  /**
+   * Returns the entity id of the vehicle of an item line, allocating one the first time.
+   *
+   * @param index the line index.
+   * @return the vehicle id reserved for that index.
+   * @since 1.0.0
+   */
+  private int vehicleId(int index) {
+    return allocate(this.vehicleIds, index);
+  }
+
+  /**
+   * Returns the id stored for an index, growing the list with fresh ids until it reaches it.
+   *
+   * @param ids   the ids allocated so far.
+   * @param index the line index.
+   * @return the id reserved for that index.
+   * @since 1.0.0
+   */
+  private static int allocate(@NotNull List<Integer> ids, int index) {
+    synchronized (ids) {
+      while (ids.size() <= index) {
+        ids.add(EntityIds.next());
       }
-      return this.entityIds.get(index);
+      return ids.get(index);
     }
   }
 
   /**
-   * Collects the entity ids of the first {@code count} lines.
+   * Collects every entity id a range of lines occupies on a client, vehicles included.
    *
-   * @param count how many ids to return.
+   * @param lines the lines as the client has them.
+   * @param from  the first index, inclusive.
+   * @param to    the last index, exclusive.
    * @return the ids, in line order.
    * @since 1.0.0
    */
-  private int[] idsUpTo(int count) {
-    int[] ids = new int[count];
-    for (int index = 0; index < count; index++) {
-      ids[index] = this.entityId(index);
+  @NotNull
+  private int[] idsOf(@NotNull List<HologramLine> lines, int from, int to) {
+    boolean vehicles = this.packets.itemLinesRide();
+    int[] ids = new int[(to - from) * 2];
+    int count = 0;
+    for (int index = from; index < to; index++) {
+      ids[count++] = this.entityId(index);
+      if (vehicles && lines.get(index).type() == HologramLine.Type.ITEM) {
+        ids[count++] = this.vehicleId(index);
+      }
     }
-    return ids;
+    return Arrays.copyOf(ids, count);
   }
 
   /**

@@ -1,8 +1,3 @@
-plugins {
-  `java-library` apply false
-  `maven-publish` apply false
-}
-
 allprojects {
   group = rootProject.property("group") as String
   version = rootProject.property("version") as String
@@ -15,26 +10,58 @@ subprojects {
   // Accessors such as `java { }` and `publishing { }` are not generated for plugins applied inside
   // this block, so the extensions are configured explicitly.
   configure<JavaPluginExtension> {
-    // Java 17 keeps the library usable on every Paper build from 1.17 upwards, including servers
-    // that already run on a Java 21 runtime.
-    toolchain.languageVersion.set(JavaLanguageVersion.of(17))
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
     withSourcesJar()
     withJavadocJar()
   }
 
   tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
-    options.release.set(17)
-    options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-processing"))
+    options.release.set(8)
+    options.compilerArgs.addAll(listOf("-Xlint:all", "-Xlint:-processing", "-Xlint:-options"))
+  }
+
+  val modernApiClasspath = configurations.create("modernApiClasspath") {
+    isCanBeConsumed = false
+    extendsFrom(configurations["api"], configurations["implementation"], configurations["compileOnly"])
+    exclude(group = "org.spigotmc")
+    attributes {
+      attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_API))
+      attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+      attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements.JAR))
+      attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.EXTERNAL))
+    }
+  }
+
+  dependencies {
+    modernApiClasspath(rootProject.libs.paper)
+  }
+
+  val mainSources = the<SourceSetContainer>()["main"]
+  val toolchains = the<JavaToolchainService>()
+  val verifyModernApi = tasks.register<JavaCompile>("verifyModernApi") {
+    description = "Compiles the main sources against the newest Paper API to catch calls it no longer has."
+    group = "verification"
+    source = mainSources.java
+    classpath = modernApiClasspath
+    destinationDirectory.set(layout.buildDirectory.dir("verify/modern-api"))
+    javaCompiler.set(toolchains.compilerFor { languageVersion.set(JavaLanguageVersion.of(21)) })
+    options.release.set(21)
+    options.compilerArgs = mutableListOf("-Xlint:none", "-nowarn")
+  }
+
+  tasks.named("check") {
+    dependsOn(verifyModernApi)
   }
 
   tasks.withType<Javadoc>().configureEach {
     val docletOptions = options as StandardJavadocDocletOptions
     docletOptions.encoding = "UTF-8"
-    docletOptions.addStringOption("Xdoclint:all,-missing/private", "-quiet")
+    docletOptions.addStringOption("Xdoclint:all", "-quiet")
     docletOptions.links(
       "https://docs.oracle.com/en/java/javase/17/docs/api/",
-      "https://jd.papermc.io/paper/1.21.4/",
+      "https://jd.papermc.io/paper/1.21.11/",
     )
     // Undocumented public API is a build failure, not a warning.
     docletOptions.addBooleanOption("Werror", true)

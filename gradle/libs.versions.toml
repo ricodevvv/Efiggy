@@ -1,11 +1,13 @@
 [versions]
-paper = "1.21.4-R0.1-SNAPSHOT"
-packetevents = "2.13.0"
+spigot = "1.8.8-R0.1-SNAPSHOT"
+paper = "1.21.11-R0.1-SNAPSHOT"
+packetevents = "2.14.0"
 annotations = "26.0.2"
 junit = "5.11.4"
 adventure = "4.17.0"
 
 [libraries]
+spigot = { group = "org.spigotmc", name = "spigot-api", version.ref = "spigot" }
 paper = { group = "io.papermc.paper", name = "paper-api", version.ref = "paper" }
 packetevents = { group = "com.github.retrooper", name = "packetevents-spigot", version.ref = "packetevents" }
 annotations = { group = "org.jetbrains", name = "annotations", version.ref = "annotations" }

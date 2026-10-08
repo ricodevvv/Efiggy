@@ -387,6 +387,9 @@ public interface Npc {
    * <p>Because teams address players by name, an NPC whose profile name equals the name of a real
    * player would colour that player as well. Give glowing NPCs a name no account uses.
    *
+   * <p>Glowing arrived in 1.9. On 1.8 the colour is remembered and returned by {@link #glowing()},
+   * but nothing is sent and no team is registered.
+   *
    * @param color the outline colour, or {@code null} to stop glowing.
    * @throws IllegalArgumentException if {@code color} is not a colour but a formatting code.
    * @throws IllegalStateException    if called off the main thread or after {@link #remove()}.

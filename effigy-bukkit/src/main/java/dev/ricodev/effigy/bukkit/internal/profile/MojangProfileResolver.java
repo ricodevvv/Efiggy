@@ -14,10 +14,13 @@ import com.google.gson.JsonParser;
 import dev.ricodev.effigy.profile.NpcProfile;
 import dev.ricodev.effigy.profile.ProfileProperty;
 import dev.ricodev.effigy.profile.ProfileResolver;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.net.HttpURLConnection;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,8 +56,10 @@ import org.jetbrains.annotations.Nullable;
  *       one HTTP request. A failed lookup is evicted immediately so that it is retried later.
  * </ul>
  *
- * <p><strong>Threading.</strong> Every method returns immediately. Futures complete on the internal
- * HTTP executor, never on the main thread, so callers have to hop back before touching Bukkit.
+ * <p><strong>Threading.</strong> Every method returns immediately. Requests run on two internal
+ * threads and futures complete there, never on the main thread, so callers have to hop back before
+ * touching Bukkit. Plain {@link HttpURLConnection} is used rather than the Java 11 HTTP client so
+ * the resolver also runs on the Java 8 servers 1.8 is usually paired with.
  *
  * <p>Not part of the public API.
  *
@@ -68,9 +73,9 @@ public final class MojangProfileResolver implements ProfileResolver, AutoCloseab
   private static final Pattern NAME_PATTERN = Pattern.compile("^\\w{1,16}$");
   private static final Pattern DASHES = Pattern.compile(
     "(\\w{8})(\\w{4})(\\w{4})(\\w{4})(\\w{12})");
-  private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
+  private static final int TIMEOUT_MILLIS = 10_000;
+  private static final String USER_AGENT = "Effigy/1.0 (+https://github.com/ricodevvv/Efiggy)";
 
-  private final HttpClient httpClient;
   private final ExecutorService executor;
   private final PacketEventsAPI<?> packetEvents;
   private final Duration timeToLive;
@@ -108,11 +113,6 @@ public final class MojangProfileResolver implements ProfileResolver, AutoCloseab
 
     ThreadFactory threadFactory = new NamedThreadFactory();
     this.executor = Executors.newFixedThreadPool(2, threadFactory);
-    this.httpClient = HttpClient.newBuilder()
-      .connectTimeout(REQUEST_TIMEOUT)
-      .followRedirects(HttpClient.Redirect.NORMAL)
-      .executor(this.executor)
-      .build();
   }
 
   @NotNull
@@ -274,42 +274,86 @@ public final class MojangProfileResolver implements ProfileResolver, AutoCloseab
   }
 
   /**
-   * Performs one GET request and returns its body.
+   * Performs one GET request on the internal threads and returns its body.
    *
    * @param url the url to request.
-   * @return a future holding the response body, empty for a 204 answer.
+   * @return a future holding the response body, empty when Mojang knows no such name or profile.
    * @since 1.0.0
    */
   @NotNull
   private CompletableFuture<String> request(@NotNull String url) {
-    HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-      .timeout(REQUEST_TIMEOUT)
-      .header("Accept", "application/json")
-      .header("User-Agent", "Effigy/1.0 (+https://github.com/ricodevvv/Efiggy)")
-      .GET()
-      .build();
+    return CompletableFuture.supplyAsync(() -> get(url), this.executor);
+  }
 
-    return this.httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
-      .thenApply(response -> {
-        int status = response.statusCode();
-        if (status == 200) {
-          return response.body();
-        }
-        if (status == 204 || status == 404) {
-          // Mojang answers an unknown name or profile with an empty body.
-          return "";
-        }
-        if (status == 429) {
-          throw new CompletionException(new IllegalStateException(
-            "Mojang rate limited the request to " + url + "; try again in a few minutes"));
-        }
+  /**
+   * Performs one blocking GET request.
+   *
+   * <p>Mojang answers an unknown name or profile with 204 or 404 and an empty body, both of which
+   * come back as an empty string.
+   *
+   * @param url the url to request.
+   * @return the response body.
+   * @throws CompletionException if the request fails or Mojang answers with an error.
+   * @since 1.0.0
+   */
+  @NotNull
+  private static String get(@NotNull String url) {
+    HttpURLConnection connection = null;
+    try {
+      connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
+      connection.setConnectTimeout(TIMEOUT_MILLIS);
+      connection.setReadTimeout(TIMEOUT_MILLIS);
+      connection.setRequestProperty("Accept", "application/json");
+      connection.setRequestProperty("User-Agent", USER_AGENT);
+
+      int status = connection.getResponseCode();
+      if (status == 200) {
+        return readBody(connection.getInputStream());
+      }
+      if (status == 204 || status == 404) {
+        return "";
+      }
+      if (status == 429) {
         throw new CompletionException(new IllegalStateException(
-          "Mojang answered " + status + " for " + url));
-      });
+          "Mojang rate limited the request to " + url + "; try again in a few minutes"));
+      }
+      throw new CompletionException(new IllegalStateException(
+        "Mojang answered " + status + " for " + url));
+    } catch (IOException exception) {
+      throw new CompletionException(exception);
+    } finally {
+      if (connection != null) {
+        connection.disconnect();
+      }
+    }
+  }
+
+  /**
+   * Reads a whole response body as UTF-8.
+   *
+   * @param stream the body stream; closed afterwards.
+   * @return the body.
+   * @throws IOException if reading fails.
+   * @since 1.0.0
+   */
+  @NotNull
+  private static String readBody(@NotNull InputStream stream) throws IOException {
+    try (Reader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
+      StringBuilder body = new StringBuilder();
+      char[] buffer = new char[4096];
+      int read;
+      while ((read = reader.read(buffer)) != -1) {
+        body.append(buffer, 0, read);
+      }
+      return body.toString();
+    }
   }
 
   /**
    * Parses a response body that has to be a JSON object.
+   *
+   * <p>Goes through the {@link JsonParser} instance method, the only one the Gson 2.2.4 bundled with
+   * 1.8 has; newer Gson versions deprecate it but still ship it.
    *
    * @param body           the body to parse.
    * @param missingMessage the message used when the body is empty.
@@ -317,11 +361,12 @@ public final class MojangProfileResolver implements ProfileResolver, AutoCloseab
    * @since 1.0.0
    */
   @NotNull
+  @SuppressWarnings("deprecation")
   private static JsonObject expectObject(@NotNull String body, @NotNull String missingMessage) {
     if (body.isEmpty()) {
       throw new CompletionException(new IllegalArgumentException(missingMessage));
     }
-    JsonElement parsed = JsonParser.parseString(body);
+    JsonElement parsed = new JsonParser().parse(body);
     if (!parsed.isJsonObject()) {
       throw new CompletionException(new IllegalStateException("Mojang returned a malformed response"));
     }

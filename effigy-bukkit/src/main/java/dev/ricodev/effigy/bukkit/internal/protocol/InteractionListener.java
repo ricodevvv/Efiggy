@@ -22,6 +22,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.plugin.Plugin;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Turns the interaction packets a client sends for an NPC into {@link NpcInteractEvent}.
@@ -45,6 +46,9 @@ import org.jetbrains.annotations.NotNull;
  * @since 1.0.0
  */
 public final class InteractionListener extends SimplePacketListenerAbstract {
+
+  @Nullable
+  private static final EquipmentSlot OFF_HAND = offHand();
 
   private final Plugin plugin;
   private final NpcRegistry registry;
@@ -106,14 +110,33 @@ public final class InteractionListener extends SimplePacketListenerAbstract {
         return;
     }
 
-    EquipmentSlot hand = packet.getHand() == InteractionHand.OFF_HAND
-      ? EquipmentSlot.OFF_HAND
+    EquipmentSlot hand = packet.getHand() == InteractionHand.OFF_HAND && OFF_HAND != null
+      ? OFF_HAND
       : EquipmentSlot.HAND;
     if (!this.cooldowns.tryAcquire(player.getUniqueId(), npc.entityId(), npc.settings().interactionCooldown())) {
       return;
     }
 
     this.dispatch(npc, player, action, hand);
+  }
+
+  /**
+   * Looks up the off hand slot, which only exists from 1.9 on.
+   *
+   * <p>Resolved by name because the library compiles against the 1.8 API, which has no such
+   * constant.
+   *
+   * @return the off hand slot, or {@code null} on 1.8.
+   * @since 1.0.0
+   */
+  @Nullable
+  private static EquipmentSlot offHand() {
+    for (EquipmentSlot slot : EquipmentSlot.values()) {
+      if (slot.name().equals("OFF_HAND")) {
+        return slot;
+      }
+    }
+    return null;
   }
 
   /**
@@ -147,7 +170,7 @@ public final class InteractionListener extends SimplePacketListenerAbstract {
 
       if (!interactEvent.isCancelled() && npc.settings().imitateSwing() && !npc.isRemoved()) {
         npc.playAnimation(
-          hand == EquipmentSlot.OFF_HAND ? NpcAnimation.SWING_OFF_HAND : NpcAnimation.SWING_MAIN_ARM,
+          hand == EquipmentSlot.HAND ? NpcAnimation.SWING_MAIN_ARM : NpcAnimation.SWING_OFF_HAND,
           player);
       }
     });

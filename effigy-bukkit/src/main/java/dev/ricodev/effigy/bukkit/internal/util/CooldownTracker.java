@@ -32,6 +32,14 @@ public final class CooldownTracker {
   private final Map<UUID, Map<Integer, Long>> lastUse = new ConcurrentHashMap<>();
 
   /**
+   * Creates a tracker with no cooldowns stored.
+   *
+   * @since 1.0.0
+   */
+  public CooldownTracker() {
+  }
+
+  /**
    * Attempts to consume the cooldown of a player for one NPC.
    *
    * @param player   the unique id of the interacting player.

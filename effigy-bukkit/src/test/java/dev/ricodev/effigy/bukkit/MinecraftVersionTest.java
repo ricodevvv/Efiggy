@@ -26,6 +26,17 @@ class MinecraftVersionTest {
     assertEquals(MinecraftVersion.of(1, 20, 4), MinecraftVersion.parse("1.20.4"));
     assertEquals(MinecraftVersion.of(1, 19, 3), MinecraftVersion.parse("1.19.3-pre1"));
     assertEquals(MinecraftVersion.of(1, 8, 8), MinecraftVersion.parse("1.8.8"));
+    assertEquals(MinecraftVersion.of(26, 3, 0), MinecraftVersion.parse("26.3"));
+  }
+
+  @Test
+  @DisplayName("the year based releases compare as newer than every 1.x release")
+  void yearBasedReleasesAreNewest() {
+    MinecraftVersion version = MinecraftVersion.of(26, 1, 0);
+    assertTrue(version.atLeast(1, 21, 11));
+    assertTrue(version.atLeast(1, 8));
+    assertFalse(version.atLeast(26, 3));
+    assertFalse(MinecraftVersion.of(1, 21, 11).atLeast(26, 1));
   }
 
   @Test

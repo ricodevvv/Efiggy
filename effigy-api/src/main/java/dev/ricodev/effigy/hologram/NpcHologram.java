@@ -115,7 +115,7 @@ public interface NpcHologram {
   /**
    * Sets the renderer producing per viewer text.
    *
-   * <p>While a renderer is set it takes precedence over {@link #lines()}. Passing {@code null}
+   * <p>While a renderer is set it takes precedence over {@link #content()}. Passing {@code null}
    * removes it and falls back to the static lines. Either way the change is pushed to every viewer
    * immediately.
    *
@@ -204,7 +204,7 @@ public interface NpcHologram {
    *
    * <p>Needed after the data a {@link HologramRenderer} reads has changed, since Effigy has no way
    * of noticing that by itself. Calls with static lines only are cheap but redundant, as
-   * {@link #lines(List)} already refreshes.
+   * {@link #content(List)} already refreshes.
    *
    * @throws IllegalStateException if called off the main thread or after the NPC was removed.
    * @since 1.0.0

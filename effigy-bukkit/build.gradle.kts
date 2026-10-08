@@ -2,7 +2,7 @@ description = "Paper and Spigot implementation of the Effigy NPC library, backed
 
 dependencies {
   api(project(":effigy-api"))
-  compileOnly(libs.paper)
+  compileOnly(libs.spigot)
   compileOnly(libs.packetevents)
   compileOnly(libs.annotations)
 
@@ -12,7 +12,7 @@ dependencies {
   compileOnly(libs.adventureLegacy)
 
   testCompileOnly(libs.annotations)
-  testImplementation(libs.paper)
+  testImplementation(libs.spigot)
   testImplementation(libs.packetevents)
   testImplementation(platform(libs.junitBom))
   testImplementation(libs.junitJupiter)
