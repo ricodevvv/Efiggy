@@ -9,8 +9,10 @@ import dev.ricodev.effigy.Npc;
 import dev.ricodev.effigy.NpcRegistry;
 import dev.ricodev.effigy.bukkit.internal.hologram.HologramImpl;
 import dev.ricodev.effigy.bukkit.internal.protocol.PacketBridge;
+import dev.ricodev.effigy.bukkit.internal.util.MinecraftVersion;
 import dev.ricodev.effigy.bukkit.internal.util.Preconditions;
 import dev.ricodev.effigy.bukkit.internal.util.Rotations;
+import dev.ricodev.effigy.bukkit.internal.util.TeamColors;
 import dev.ricodev.effigy.event.NpcHideEvent;
 import dev.ricodev.effigy.event.NpcShowEvent;
 import dev.ricodev.effigy.hologram.NpcHologram;
@@ -579,14 +581,20 @@ public final class NpcImpl implements Npc {
    *
    * <p>The outline colour of an entity is not part of its metadata; clients read it from the team
    * the entity belongs to. The team is registered on the main scoreboard and named after the entity
-   * id, so two NPCs never share one.
+   * id, so two NPCs never share one. The id is written in base 36 to stay within the sixteen
+   * characters a team name may have before 1.18. Nothing happens on 1.8, which has no glowing.
    *
    * @param color the colour to apply, or {@code null} to delete the team again.
    * @since 1.0.0
    */
   private void updateGlowTeam(@Nullable ChatColor color) {
+    MinecraftVersion version = this.effigy.packets().version();
+    if (!version.atLeast(1, 9)) {
+      return;
+    }
+
     Scoreboard scoreboard = this.effigy.plugin().getServer().getScoreboardManager().getMainScoreboard();
-    String teamName = "effigy-" + this.entityId;
+    String teamName = "effigy-" + Integer.toString(this.entityId, 36);
     Team team = scoreboard.getTeam(teamName);
 
     if (color == null) {
@@ -598,7 +606,7 @@ public final class NpcImpl implements Npc {
     if (team == null) {
       team = scoreboard.registerNewTeam(teamName);
     }
-    team.setColor(color);
+    TeamColors.apply(team, color, version);
     team.addEntry(this.profile.name());
   }
 

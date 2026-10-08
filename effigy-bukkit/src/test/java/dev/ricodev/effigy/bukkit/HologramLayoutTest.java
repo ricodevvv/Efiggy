@@ -84,7 +84,7 @@ class HologramLayoutTest {
   void itemLinesReserveTheirOwnHeight() {
     List<HologramLine> content = Arrays.asList(
       HologramLine.text("above"),
-      HologramLine.item(new org.bukkit.inventory.ItemStack()),
+      HologramLine.item(new org.bukkit.inventory.ItemStack(org.bukkit.Material.STONE)),
       HologramLine.text("below"));
     double[] positions = layout(content);
 
@@ -110,9 +110,9 @@ class HologramLayoutTest {
   @DisplayName("no two lines ever overlap, whatever the mix")
   void linesNeverOverlap() {
     List<HologramLine> content = Arrays.asList(
-      HologramLine.item(new org.bukkit.inventory.ItemStack()),
+      HologramLine.item(new org.bukkit.inventory.ItemStack(org.bukkit.Material.STONE)),
       HologramLine.text("one"),
-      HologramLine.item(new org.bukkit.inventory.ItemStack()),
+      HologramLine.item(new org.bukkit.inventory.ItemStack(org.bukkit.Material.STONE)),
       HologramLine.text("two"),
       HologramLine.text("three"));
     double[] positions = layout(content);
