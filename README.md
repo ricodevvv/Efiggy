@@ -112,6 +112,9 @@ dependencies {
 }
 ```
 
+On JitPack the version is a git tag or a commit hash. There's no tagged release yet, so until there
+is one use `main-SNAPSHOT` for the latest `main`, or a commit hash if you want the build pinned.
+
 Relocate `dev.ricodev.effigy` when you shade it, so two plugins bundling different versions do not
 fight over the same classes.
 
@@ -277,18 +280,16 @@ upwards, each taking the height of its own kind: `lineSpacing` (0.28) for text, 
 
 ## Building
 
-The Gradle wrapper is not committed, so generate it once:
-
 ```bash
-gradle wrapper --gradle-version 8.14.3
 ./gradlew build          # compile, test, and build the javadoc
 ./gradlew publishToMavenLocal
 ```
 
-You need JDK 21 to build, even though the jar targets Java 8. The sources compile against the
-Spigot 1.8.8 API, so anything that doesn't exist on 1.8 fails right there, and `check` compiles them
-a second time against the latest Paper API (`verifyModernApi`) to catch anything newer versions
-removed. Paper's API ships Java 21 class files, hence the JDK.
+Any JDK from 17 up works, and the jar always comes out as Java 8 bytecode. The sources compile
+against the Spigot 1.8.8 API, so anything that doesn't exist on 1.8 fails right there, and `check`
+compiles them a second time against the latest Paper API (`verifyModernApi`) to catch anything newer
+versions removed. Paper's API ships Java 21 class files, so that one task runs on a JDK 21 toolchain;
+if you don't have one installed, Gradle downloads it the first time.
 
 Undocumented public API is a build failure, not a warning: the javadoc task runs with
 `-Xdoclint:all` and `-Werror`.
