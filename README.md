@@ -26,7 +26,8 @@ effigy.profiles().resolveByName("Notch").thenAcceptAsync(profile -> {
 
 The NPCs only exist as packets, so the server never ticks them and other plugins never see them.
 Events are plain Bukkit events, a click fires once no matter how many packets the client sends,
-and skins are cached so a hundred NPCs with the same skin cost one request to Mojang.
+and skins are cached so a hundred NPCs with the same skin cost one request to Mojang. It doesn't
+save NPCs, has no pathfinding or AI, and doesn't support Folia.
 
 ## Setup
 
@@ -135,21 +136,6 @@ Bukkit.getScheduler().runTaskTimer(plugin, () -> npc.hologram().refresh(), 20L, 
 ```
 
 Spacing is set with `offsetY`, `lineSpacing` and `itemLineHeight` on the hologram.
-
-## Old versions
-
-One jar works on every version. A few things just don't exist on older ones:
-
-- Glowing needs 1.9. On 1.8 it does nothing.
-- Off hand needs 1.9. On 1.8 it's ignored, and every click reports `HAND`.
-- Poses need 1.14. Before that only `CROUCHING` works, as sneaking.
-- Before 1.19.3 the tab list entry gets removed after `tabListRemovalDelay`, since those versions
-  can't hide it any other way.
-- On 1.8 and 1.9 item lines ride an invisible armour stand so they don't fall. Looks the same.
-
-Players on other client versions through ViaVersion or ViaBackwards work as usual.
-
-Effigy doesn't save NPCs, has no pathfinding or AI, and doesn't support Folia.
 
 ## Building
 
