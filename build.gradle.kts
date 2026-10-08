@@ -39,12 +39,14 @@ subprojects {
   }
 
   val mainSources = the<SourceSetContainer>()["main"]
+  val toolchains = the<JavaToolchainService>()
   val verifyModernApi = tasks.register<JavaCompile>("verifyModernApi") {
     description = "Compiles the main sources against the newest Paper API to catch calls it no longer has."
     group = "verification"
     source = mainSources.java
     classpath = modernApiClasspath
     destinationDirectory.set(layout.buildDirectory.dir("verify/modern-api"))
+    javaCompiler.set(toolchains.compilerFor { languageVersion.set(JavaLanguageVersion.of(21)) })
     options.release.set(21)
     options.compilerArgs = mutableListOf("-Xlint:none", "-nowarn")
   }
