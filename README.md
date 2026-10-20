@@ -34,23 +34,37 @@ save NPCs, has no pathfinding or AI, and doesn't support Folia.
 You need Java 8+, Spigot or Paper 1.8.8 – 26.3 and PacketEvents 2.14.0+, either installed as a
 plugin or shaded into yours.
 
-Effigy isn't on Maven Central yet, so grab it from JitPack:
+Effigy isn't on Maven Central yet, so grab it from my Maven repo:
 
 ```kotlin
 repositories {
   mavenCentral()
-  maven("https://jitpack.io")
+  maven("https://maven.ricodevvv.com/public-repo")
   maven("https://repo.codemc.io/repository/maven-releases/")
 }
 
 dependencies {
-  implementation("com.github.ricodevvv.Efiggy:effigy-bukkit:main-SNAPSHOT")
+  implementation("com.github.ricodevvv:effigy-bukkit:1.0.0-SNAPSHOT")
   compileOnly("com.github.retrooper:packetevents-spigot:2.14.0")
 }
 ```
 
-There's no tagged release yet, so use `main-SNAPSHOT` or a commit hash. If you shade Effigy,
-relocate `dev.ricodev.effigy` so two plugins bundling different versions don't clash.
+```xml
+<repository>
+  <id>ricodevvv</id>
+  <url>https://maven.ricodevvv.com/public-repo</url>
+</repository>
+
+<dependency>
+  <groupId>com.github.ricodevvv</groupId>
+  <artifactId>effigy-bukkit</artifactId>
+  <version>1.0.0-SNAPSHOT</version>
+</dependency>
+```
+
+There's no tagged release yet, so it's a snapshot for now. JitPack works too with
+`com.github.ricodevvv.Efiggy:effigy-bukkit:main-SNAPSHOT` from `https://jitpack.io`. If you shade
+Effigy, relocate `dev.ricodev.effigy` so two plugins bundling different versions don't clash.
 
 With PacketEvents as a plugin, add `depend: [packetevents]` to your `plugin.yml` and create the
 instance in `onEnable`:

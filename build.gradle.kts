@@ -96,5 +96,10 @@ subprojects {
         }
       }
     }
+    repositories.maven {
+      name = "reposilite"
+      url = uri("https://maven.ricodevvv.com/public-repo")
+      credentials(PasswordCredentials::class)
+    }
   }
 }
